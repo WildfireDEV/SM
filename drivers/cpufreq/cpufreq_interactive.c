@@ -19,6 +19,7 @@
 #include <linux/cpu.h>
 #include <linux/cpumask.h>
 #include <linux/cpufreq.h>
+#include <linux/cpufreq_kt.h>
 #include <linux/ipa.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -129,6 +130,9 @@ static unsigned int cluster0_min_freq=0;
 			pm_qos_remove_request(req); \
 }
 #endif /* CONFIG_MODE_AUTO_CHANGE */
+
+#define DEFAULT_SCREEN_OFF_MAX 1000000
+static unsigned long screen_off_max = DEFAULT_SCREEN_OFF_MAX;
 
 struct cpufreq_interactive_tunables {
 	int usage_count;
@@ -1032,6 +1036,9 @@ static int cpufreq_interactive_speedchange_task(void *data)
 				if (pjcpu->target_freq > max_freq)
 					max_freq = pjcpu->target_freq;
 			}
+			
+			if (unlikely(!screen_is_on))
+					if (max_freq > screen_off_max) max_freq = screen_off_max;
 
 			if (max_freq != pcpu->policy->cur) {
 				u64 now;
@@ -1948,6 +1955,23 @@ show_gov_pol_sys(cpu_util);
 #ifdef CONFIG_PMU_COREMEM_RATIO
 show_gov_pol_sys(region_time_in_state);
 #endif
+
+#define gov_sys_attr_ro(_name)						\
+static struct global_attr _name##_gov_sys =				\
+__ATTR(_name, 0440, show_##_name##_gov_sys, store_##_name##_gov_sys)
+
+#define gov_pol_attr_ro(_name)						\
+static struct freq_attr _name##_gov_pol =				\
+__ATTR(_name, 0440, show_##_name##_gov_pol, store_##_name##_gov_pol)
+
+#define gov_sys_pol_attr_ro(_name)					\
+	gov_sys_attr_ro(_name);						\
+	gov_pol_attr_ro(_name)
+
+gov_sys_pol_attr_ro(target_loads);
+gov_sys_pol_attr_ro(above_hispeed_delay);
+gov_sys_pol_attr_ro(go_hispeed_load);
+
 #define gov_sys_attr_rw(_name)						\
 static struct global_attr _name##_gov_sys =				\
 __ATTR(_name, 0660, show_##_name##_gov_sys, store_##_name##_gov_sys)
@@ -1960,10 +1984,7 @@ __ATTR(_name, 0660, show_##_name##_gov_pol, store_##_name##_gov_pol)
 	gov_sys_attr_rw(_name);						\
 	gov_pol_attr_rw(_name)
 
-gov_sys_pol_attr_rw(target_loads);
-gov_sys_pol_attr_rw(above_hispeed_delay);
 gov_sys_pol_attr_rw(hispeed_freq);
-gov_sys_pol_attr_rw(go_hispeed_load);
 gov_sys_pol_attr_rw(min_sample_time);
 gov_sys_pol_attr_rw(timer_rate);
 gov_sys_pol_attr_rw(timer_slack);
@@ -2705,6 +2726,7 @@ static int __init cpufreq_interactive_init(void)
 {
 	unsigned int i;
 	struct cpufreq_interactive_cpuinfo *pcpu;
+	screen_is_on = true;
 
 	/* Initalize per-cpu timers */
 	for_each_possible_cpu(i) {
